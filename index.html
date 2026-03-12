@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>XPERYMENT AR - Superficie</title>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: Arial, sans-serif; }
+    canvas { display: block; }
+    #start-btn {
+      position: fixed;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      padding: 20px 40px;
+      font-size: 20px;
+      background: #1CC7C7;
+      color: white;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      z-index: 10;
+      font-weight: bold;
+      box-shadow: 0 4px 20px rgba(28,199,199,0.4);
+    }
+    #start-btn:active { background: #17a5a5; }
+    #info {
+      position: fixed;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.7);
+      color: white;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 16px;
+      z-index: 10;
+      display: none;
+      text-align: center;
+    }
+    #no-ar {
+      position: fixed;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      background: #fff;
+      color: #333;
+      padding: 30px;
+      border-radius: 12px;
+      font-size: 18px;
+      z-index: 10;
+      display: none;
+      text-align: center;
+      max-width: 80%;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    }
+  </style>
+</head>
+<body>
+  <button id="start-btn">ACTIVAR AR<br><small>Apunta a una pared o superficie</small></button>
+  <div id="info">Mueve el teléfono lentamente · Toca la pantalla para colocar la imagen</div>
+  <div id="no-ar">
+    <p><strong>Tu dispositivo no soporta AR de superficie</strong></p>
+    <p>Necesitas Android con Google Chrome y ARCore instalado.</p>
+    <p>Busca "Google Play Services for AR" en Play Store.</p>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+
+    let camera, scene, renderer;
+    let reticle, imageMesh;
+    let hitTestSource = null;
+    let hitTestSourceRequested = false;
+    let imageTexture;
+    let imagePlaced = false;
+
+    const startBtn = document.getElementById('start-btn');
+    const info = document.getElementById('info');
+    const noAr = document.getElementById('no-ar');
+
+    // Load texture
+    const loader = new THREE.TextureLoader();
+    imageTexture = loader.load('./overlay.png');
+
+    startBtn.addEventListener('click', async () => {
+      if (!navigator.xr) {
+        noAr.style.display = 'block';
+        startBtn.style.display = 'none';
+        return;
+      }
+
+      const supported = await navigator.xr.isSessionSupported('immersive-ar');
+      if (!supported) {
+        noAr.style.display = 'block';
+        startBtn.style.display = 'none';
+        return;
+      }
+
+      startBtn.style.display = 'none';
+      init();
+    });
+
+    function init() {
+      scene = new THREE.Scene();
+
+      camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+
+      const light = new THREE.AmbientLight(0xffffff, 1.5);
+      scene.add(light);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+      dirLight.position.set(0, 2, 1);
+      scene.add(dirLight);
+
+      // Reticle (circle that shows where surface is detected)
+      const ringGeo = new THREE.RingGeometry(0.08, 0.1, 32);
+      ringGeo.rotateX(-Math.PI / 2);
+      const ringMat = new THREE.MeshBasicMaterial({ color: 0x1CC7C7 });
+      reticle = new THREE.Mesh(ringGeo, ringMat);
+      reticle.matrixAutoUpdate = false;
+      reticle.visible = false;
+      scene.add(reticle);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.xr.enabled = true;
+      document.body.appendChild(renderer.domElement);
+
+      // Start AR session
+      const sessionInit = {
+        requiredFeatures: ['hit-test'],
+        optionalFeatures: ['dom-overlay'],
+        domOverlay: { root: document.getElementById('info') }
+      };
+
+      navigator.xr.requestSession('immersive-ar', sessionInit).then((session) => {
+        renderer.xr.setReferenceSpaceType('local');
+        renderer.xr.setSession(session);
+        info.style.display = 'block';
+
+        session.addEventListener('select', onSelect);
+
+        renderer.setAnimationLoop(render);
+      });
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+    }
+
+    function onSelect() {
+      if (reticle.visible && !imagePlaced) {
+        // Create image plane
+        const geo = new THREE.PlaneGeometry(0.8, 1.2);
+        const mat = new THREE.MeshBasicMaterial({
+          map: imageTexture,
+          transparent: true,
+          side: THREE.DoubleSide
+        });
+        imageMesh = new THREE.Mesh(geo, mat);
+        imageMesh.position.setFromMatrixPosition(reticle.matrix);
+
+        // Get reticle orientation
+        const q = new THREE.Quaternion();
+        q.setFromRotationMatrix(reticle.matrix);
+        imageMesh.quaternion.copy(q);
+
+        // Rotate to stand upright on the surface
+        imageMesh.rotateX(-Math.PI / 2);
+        // Lift slightly above surface
+        imageMesh.position.y += 0.6;
+
+        scene.add(imageMesh);
+        imagePlaced = true;
+        info.textContent = '¡Imagen colocada! Mueve el teléfono para explorar.';
+      } else if (imagePlaced) {
+        // Allow repositioning - remove old and place new
+        if (imageMesh) scene.remove(imageMesh);
+        imagePlaced = false;
+        info.textContent = 'Mueve el teléfono · Toca para colocar la imagen';
+        onSelect();
+      }
+    }
+
+    function render(timestamp, frame) {
+      if (frame) {
+        const referenceSpace = renderer.xr.getReferenceSpace();
+        const session = renderer.xr.getSession();
+
+        if (!hitTestSourceRequested) {
+          session.requestReferenceSpace('viewer').then((viewerSpace) => {
+            session.requestHitTestSource({ space: viewerSpace }).then((source) => {
+              hitTestSource = source;
+            });
+          });
+          hitTestSourceRequested = true;
+
+          session.addEventListener('end', () => {
+            hitTestSourceRequested = false;
+            hitTestSource = null;
+          });
+        }
+
+        if (hitTestSource) {
+          const hitTestResults = frame.getHitTestResults(hitTestSource);
+          if (hitTestResults.length) {
+            const hit = hitTestResults[0];
+            reticle.visible = true;
+            reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
+          } else {
+            reticle.visible = false;
+          }
+        }
+      }
+
+      renderer.render(scene, camera);
+    }
+  </script>
+</body>
+</html>
