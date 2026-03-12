@@ -63,14 +63,6 @@
     <p>Busca "Google Play Services for AR" en Play Store.</p>
   </div>
 
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js"
-      }
-    }
-  </script>
-
   <script type="module">
     import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
 
@@ -85,7 +77,6 @@
     const info = document.getElementById('info');
     const noAr = document.getElementById('no-ar');
 
-    // Load texture
     const loader = new THREE.TextureLoader();
     imageTexture = loader.load('./overlay.png');
 
@@ -109,17 +100,14 @@
 
     function init() {
       scene = new THREE.Scene();
-
       camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
       const light = new THREE.AmbientLight(0xffffff, 1.5);
       scene.add(light);
-
       const dirLight = new THREE.DirectionalLight(0xffffff, 1);
       dirLight.position.set(0, 2, 1);
       scene.add(dirLight);
 
-      // Reticle (circle that shows where surface is detected)
       const ringGeo = new THREE.RingGeometry(0.08, 0.1, 32);
       ringGeo.rotateX(-Math.PI / 2);
       const ringMat = new THREE.MeshBasicMaterial({ color: 0x1CC7C7 });
@@ -134,7 +122,6 @@
       renderer.xr.enabled = true;
       document.body.appendChild(renderer.domElement);
 
-      // Start AR session
       const sessionInit = {
         requiredFeatures: ['hit-test'],
         optionalFeatures: ['dom-overlay'],
@@ -145,9 +132,7 @@
         renderer.xr.setReferenceSpaceType('local');
         renderer.xr.setSession(session);
         info.style.display = 'block';
-
         session.addEventListener('select', onSelect);
-
         renderer.setAnimationLoop(render);
       });
 
@@ -159,36 +144,34 @@
     }
 
     function onSelect() {
-      if (reticle.visible && !imagePlaced) {
-        // Create image plane
-        const geo = new THREE.PlaneGeometry(0.8, 1.2);
+      if (reticle.visible) {
+        if (imageMesh) scene.remove(imageMesh);
+
+        // Vertical image: width 0.6, height 1.0 (ratio ~3:5)
+        const geo = new THREE.PlaneGeometry(0.6, 1.0);
         const mat = new THREE.MeshBasicMaterial({
           map: imageTexture,
           transparent: true,
           side: THREE.DoubleSide
         });
         imageMesh = new THREE.Mesh(geo, mat);
-        imageMesh.position.setFromMatrixPosition(reticle.matrix);
 
-        // Get reticle orientation
-        const q = new THREE.Quaternion();
-        q.setFromRotationMatrix(reticle.matrix);
-        imageMesh.quaternion.copy(q);
+        // Position at reticle
+        const pos = new THREE.Vector3();
+        pos.setFromMatrixPosition(reticle.matrix);
+        imageMesh.position.copy(pos);
 
-        // Rotate to stand upright on the surface
-        imageMesh.rotateX(-Math.PI / 2);
-        // Lift slightly above surface
-        imageMesh.position.y += 0.6;
+        // Stand upright above the surface
+        imageMesh.position.y += 0.5;
+
+        // Face the camera
+        const camPos = new THREE.Vector3();
+        camera.getWorldPosition(camPos);
+        imageMesh.lookAt(camPos.x, imageMesh.position.y, camPos.z);
 
         scene.add(imageMesh);
         imagePlaced = true;
-        info.textContent = '¡Imagen colocada! Mueve el teléfono para explorar.';
-      } else if (imagePlaced) {
-        // Allow repositioning - remove old and place new
-        if (imageMesh) scene.remove(imageMesh);
-        imagePlaced = false;
-        info.textContent = 'Mueve el teléfono · Toca para colocar la imagen';
-        onSelect();
+        info.textContent = 'Toca de nuevo para reubicar la imagen';
       }
     }
 
@@ -204,7 +187,6 @@
             });
           });
           hitTestSourceRequested = true;
-
           session.addEventListener('end', () => {
             hitTestSourceRequested = false;
             hitTestSource = null;
@@ -222,7 +204,6 @@
           }
         }
       }
-
       renderer.render(scene, camera);
     }
   </script>
